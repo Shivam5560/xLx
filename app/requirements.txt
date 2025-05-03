@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+gunicorn
+celery
+redis
+pandas
+openpyxl
+python-multipart
+pydantic
+python-jose
+passlib
+bcrypt
+python-dotenv
+groq
+numpy
+scikit-learn 
