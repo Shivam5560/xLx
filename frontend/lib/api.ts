@@ -6,32 +6,19 @@ export interface FileData {
   id: string;
   name: string;
   columns: string[];
-  preview: any[];
+  preview: Record<string, any>[];
+  data: Record<string, any>[];
   statistics?: {
-    numeric: Record<string, {
-      min: number;
-      max: number;
-      mean: number;
-      median: number;
-      mode: number | null;
-      std: number;
-      percentiles: {
-        '25': number;
-        '50': number;
-        '75': number;
-      };
-      sum: number;
-      count: number;
-      missing: number;
-      unique: number;
+    numeric: Record<string, any>;
+    categorical: Record<string, any>;
+    correlations?: Array<{
+      column1: string;
+      column2: string;
+      correlation: number;
     }>;
-    categorical: Record<string, {
-      unique: string[];
-      unique_count: number;
-      frequency: Record<string, number>;
-      top: string | null;
-      count: number;
-      missing: number;
+    trends?: Array<{
+      column: string;
+      trend_strength: number;
     }>;
   };
 }
@@ -241,6 +228,8 @@ const api = {
   }): Promise<ApiResponse<any>> => {
     try {
       const response = await axiosInstance.post('/ai/suggestions', data);
+      console.log("Testing API UI")
+      console.log(response)
       return response.data;
     } catch (error) {
       console.error('Error generating AI suggestions:', error);

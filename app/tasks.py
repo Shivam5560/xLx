@@ -85,13 +85,13 @@ def get_ai_suggestions(metadata: Dict[str, Any]) -> Dict[str, Any]:
         
         # Get suggestions from Groq
         response = groq_client.chat.completions.create(
-            model="mixtral-8x7b-32768",
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[
                 {"role": "system", "content": "You are an expert data analyst. Provide suggestions for data operations based on the metadata provided."},
                 {"role": "user", "content": context}
             ],
-            temperature=0.7,
-            max_tokens=500
+            temperature=0.8,
+            max_tokens=2048
         )
         
         return {

@@ -19,14 +19,21 @@ import {
 } from "@/components/ui/chart"
 
 interface RadialChartProps {
-  data: any[];
+  data: Array<{
+    name: string;
+    value: number;
+    [key: string]: any;
+  }>;
   xAxis: string;
   yAxis: string;
   title: string;
   description?: string;
+  showLegend?: boolean;
+  showGrid?: boolean;
+  showTooltip?: boolean;
+  formatValue?: (value: number) => string;
   innerRadius?: number;
   outerRadius?: number;
-  showLegend?: boolean;
 }
 
 const CHART_COLOR_ARRAY = [
@@ -49,43 +56,38 @@ export function RadialChart({
   yAxis,
   title,
   description,
+  showLegend = false,
+  showGrid = true,
+  showTooltip = true,
+  formatValue = (value) => value.toLocaleString(),
   innerRadius = 60,
   outerRadius = 80,
-  showLegend = false,
 }: RadialChartProps) {
   // Transform data for the chart
   const chartData = React.useMemo(() => {
-    return data.map((item) => ({
-      name: item[xAxis],
-      value: item[yAxis],
-    }));
+    return data.map((item) => {
+      const xValue = item[xAxis as keyof typeof item];
+      const yValue = item[yAxis as keyof typeof item];
+      return {
+        name: String(xValue),
+        value: Number(yValue),
+        originalData: item
+      };
+    });
   }, [data, xAxis, yAxis]);
-
-  // Calculate total for center text
-  const total = React.useMemo(() => {
-    return chartData.reduce((sum, item) => sum + item.value, 0);
-  }, [chartData]);
 
   // Create chart config
   const chartConfig = React.useMemo(() => {
     const config: ChartConfig = {
       value: {
         label: yAxis,
+        value: 0,
+        color: CHART_COLORS.primary
       }
     };
     
-    // Add config for each unique category
-    chartData.forEach((item, index) => {
-      config[item.name] = {
-        label: item.name,
-        color: CHART_COLOR_ARRAY[index % CHART_COLOR_ARRAY.length],
-        value: item.value,
-        percentage: (item.value / total) * 100
-      };
-    });
-
     return config;
-  }, [chartData, yAxis, total]);
+  }, [yAxis]);
 
   return (
     <Card className="flex flex-col">
@@ -113,32 +115,27 @@ export function RadialChart({
                 {chartData.map((entry, index) => (
                   <Cell
                     key={`cell-${index}`}
-                    fill={CHART_COLOR_ARRAY[index % CHART_COLOR_ARRAY.length]}
+                    fill={CHART_COLORS.primary}
+                    stroke={CHART_COLORS.muted}
+                    strokeWidth={2}
                   />
                 ))}
               </Pie>
-              <ChartTooltip>
-                <ChartTooltipContent />
-              </ChartTooltip>
-              <text
-                x="50%"
-                y="50%"
-                textAnchor="middle"
-                dominantBaseline="middle"
-                className="fill-foreground text-sm font-medium"
-              >
-                {total.toLocaleString()}
-              </text>
+              {showTooltip && (
+                <ChartTooltip>
+                  <ChartTooltipContent />
+                </ChartTooltip>
+              )}
             </RechartsPieChart>
           </ResponsiveContainer>
         </ChartContainer>
         {showLegend && (
           <div className="flex flex-wrap justify-center gap-4 mt-4">
-            {chartData.map((item, index) => (
+            {chartData.map((item) => (
               <div key={item.name} className="flex items-center gap-2">
                 <div
                   className="w-3 h-3 rounded-full"
-                  style={{ backgroundColor: CHART_COLOR_ARRAY[index % CHART_COLOR_ARRAY.length] }}
+                  style={{ backgroundColor: CHART_COLORS.primary }}
                 />
                 <span className="text-sm text-gray-600">{item.name}</span>
               </div>

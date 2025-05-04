@@ -19,11 +19,21 @@ import {
 } from "@/components/ui/chart"
 
 interface LineChartProps {
-  data: any[];
+  data: Array<{
+    name: string;
+    value: number;
+    [key: string]: any;
+  }>;
   xAxis: string;
   yAxis: string;
   title: string;
   description?: string;
+  showLegend?: boolean;
+  showGrid?: boolean;
+  showTooltip?: boolean;
+  formatValue?: (value: number) => string;
+  strokeWidth?: number;
+  dotSize?: number;
 }
 
 export function LineChart({
@@ -32,13 +42,24 @@ export function LineChart({
   yAxis,
   title,
   description,
+  showLegend = false,
+  showGrid = true,
+  showTooltip = true,
+  formatValue = (value) => value.toLocaleString(),
+  strokeWidth = 2,
+  dotSize = 4,
 }: LineChartProps) {
   // Transform data for the chart
   const chartData = React.useMemo(() => {
-    return data.map((item) => ({
-      name: item[xAxis],
-      value: item[yAxis],
-    }));
+    return data.map((item) => {
+      const xValue = item[xAxis as keyof typeof item];
+      const yValue = item[yAxis as keyof typeof item];
+      return {
+        name: String(xValue),
+        value: Number(yValue),
+        originalData: item
+      };
+    });
   }, [data, xAxis, yAxis]);
 
   // Create chart config
@@ -46,20 +67,13 @@ export function LineChart({
     const config: ChartConfig = {
       value: {
         label: yAxis,
+        value: 0,
+        color: CHART_COLORS.primary
       }
     };
     
-    // Add config for each data point
-    chartData.forEach((item) => {
-      config[item.name] = {
-        label: item.name,
-        color: CHART_COLORS.primary,
-        value: item.value
-      };
-    });
-
     return config;
-  }, [chartData, yAxis]);
+  }, [yAxis]);
 
   return (
     <Card className="flex flex-col">
@@ -74,30 +88,50 @@ export function LineChart({
         >
           <ResponsiveContainer width="100%" height="100%">
             <RechartsLineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis 
-                dataKey="name" 
-                tick={{ fontSize: 12 }}
+              {showGrid && (
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+              )}
+              <XAxis
+                dataKey="name"
+                className="text-xs"
                 tickLine={false}
+                axisLine={false}
               />
-              <YAxis 
-                tick={{ fontSize: 12 }}
+              <YAxis
+                className="text-xs"
                 tickLine={false}
+                axisLine={false}
+                tickFormatter={formatValue}
               />
+              {showTooltip && (
+                <ChartTooltip>
+                  <ChartTooltipContent />
+                </ChartTooltip>
+              )}
               <Line
                 type="monotone"
                 dataKey="value"
                 stroke={CHART_COLORS.primary}
-                strokeWidth={2}
-                dot={{ r: 4 }}
-                activeDot={{ r: 6 }}
+                strokeWidth={strokeWidth}
+                dot={{ r: dotSize }}
+                activeDot={{ r: dotSize * 2 }}
               />
-              <ChartTooltip>
-                <ChartTooltipContent />
-              </ChartTooltip>
             </RechartsLineChart>
           </ResponsiveContainer>
         </ChartContainer>
+        {showLegend && (
+          <div className="flex flex-wrap justify-center gap-4 mt-4">
+            {chartData.map((item) => (
+              <div key={item.name} className="flex items-center gap-2">
+                <div
+                  className="w-3 h-3 rounded-full"
+                  style={{ backgroundColor: CHART_COLORS.primary }}
+                />
+                <span className="text-sm text-gray-600">{item.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

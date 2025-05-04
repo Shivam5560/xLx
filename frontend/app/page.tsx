@@ -106,6 +106,7 @@ interface FileData {
   name: string;
   columns: string[];
   preview: Record<string, any>[];
+  data: Record<string, any>[]; // Add complete data
   statistics?: Statistics;
 }
 
@@ -486,28 +487,106 @@ export default function Home() {
   const handleAddVisualizationToFlow = (form: OperationForm) => {
     if (!selectedFile) return;
 
+    // Use the complete data if available, otherwise fallback to preview
+    const completeData = selectedFile.data && selectedFile.data.length > 0 ? selectedFile.data : selectedFile.preview || [];
+    if (!completeData || completeData.length === 0) return;
+
+    // Normalize x-axis values for grouping
+    const xAxis = form.config.xAxis;
+    const yAxis = form.config.yAxis;
+    const aggregation = selectedAggregation;
+    const normalizedData = completeData.map(row => {
+      const xValue = String(row[xAxis]).trim().toLowerCase();
+      return {
+        ...row,
+        [xAxis]: xValue
+      };
+    });
+
+    // Group by x-axis
+    const groupedMap = new Map<string, typeof completeData[0][]>()
+    normalizedData.forEach(row => {
+      const xValue = row[xAxis] as string;
+      if (!groupedMap.has(xValue)) groupedMap.set(xValue, []);
+      groupedMap.get(xValue)?.push(row);
+    });
+
+    // Aggregate y-axis values
+    const processedData = Array.from(groupedMap.entries()).map(([xValue, rows]) => {
+      const yValues = rows
+        .map(row => {
+          const value = row[yAxis];
+          return typeof value === 'number' ? value : typeof value === 'string' ? parseFloat(value) : 0;
+        })
+        .filter(val => !isNaN(val));
+      let aggregatedValue = 0;
+      switch (aggregation) {
+        case 'sum':
+          aggregatedValue = yValues.reduce((sum, val) => sum + val, 0);
+          break;
+        case 'mean':
+          aggregatedValue = yValues.length > 0 ? yValues.reduce((sum, val) => sum + val, 0) / yValues.length : 0;
+          break;
+        case 'max':
+          aggregatedValue = yValues.length > 0 ? Math.max(...yValues) : 0;
+          break;
+        case 'min':
+          aggregatedValue = yValues.length > 0 ? Math.min(...yValues) : 0;
+          break;
+        case 'count':
+          aggregatedValue = yValues.length;
+          break;
+        default:
+          aggregatedValue = yValues.reduce((sum, val) => sum + val, 0);
+      }
+      // Use the original case for display
+      const originalXValue = rows[0][xAxis];
+      return {
+        name: originalXValue,
+        value: aggregatedValue,
+        count: yValues.length,
+        totalRows: rows.length,
+        [xAxis]: originalXValue,
+        [yAxis]: aggregatedValue
+      };
+    });
+
+    // Sort processed data by x-axis value
+    processedData.sort((a, b) => {
+      const aValue = a.name;
+      const bValue = b.name;
+      const aNum = Number(aValue);
+      const bNum = Number(bValue);
+      if (!isNaN(aNum) && !isNaN(bNum)) return aNum - bNum;
+      return String(aValue).localeCompare(String(bValue));
+    });
+
     const newVisualization: VisualizationConfig = {
       id: `viz-${Date.now()}`,
       type: currentGraphType,
       title: form.config.title,
       config: {
-        xAxis: form.config.xAxis,
-        yAxis: form.config.yAxis,
-        aggregation: selectedAggregation,
-        data: selectedFile.preview
+        xAxis,
+        yAxis,
+        aggregation,
+        data: processedData,
+        showAllData: true,
+        groupBy: xAxis,
+        totalRows: completeData.length,
+        groupedRows: processedData.length
       },
       order: visualizations.length
     };
 
     setVisualizations(prev => [...prev, newVisualization]);
     setPendingVisualizations(prev => [...prev, newVisualization]);
-    
+
     // Add node to flow
     const newNode: Node = {
       id: newVisualization.id,
       type: 'visualization',
       position: { x: 250, y: visualizations.length * 100 },
-      data: { 
+      data: {
         label: newVisualization.title,
         type: newVisualization.type,
         config: newVisualization.config,
@@ -515,7 +594,7 @@ export default function Home() {
         onDelete: () => handleDeleteVisualization(newVisualization.id)
       }
     };
-    
+
     setNodes(prev => [...prev, newNode]);
     setShowFlow(true);
   };
@@ -1093,7 +1172,7 @@ export default function Home() {
                 <h4 className="text-sm font-medium mb-2">File Details</h4>
                 <div className="text-sm text-gray-500 space-y-1">
                   <p>Name: {selectedFile.name}</p>
-                  <p>Rows: {selectedFile.preview.length}</p>
+                  <p>Rows: {selectedFile.data?.length || selectedFile.preview.length}</p>
                   <p>Columns: {selectedFile.columns.length}</p>
                 </div>
               </div>
@@ -1364,7 +1443,7 @@ export default function Home() {
         return (
           <BarChart
             data={viz.config.data}
-            xAxis={viz.config.xAxis}
+            xAxis="name"
             yAxis={viz.config.yAxis}
             title={title}
             description={description}
@@ -1456,7 +1535,7 @@ export default function Home() {
     }
   };
 
-  // Update the generateAiSuggestions function to only send metadata
+  // Update the generateAiSuggestions function to properly handle the complete dataset
   const generateAiSuggestions = useCallback(async () => {
     if (!selectedFile || !selectedFile.statistics) {
       console.log('No file selected or statistics missing');
@@ -1473,6 +1552,12 @@ export default function Home() {
     try {
       setIsGeneratingSuggestions(true);
       
+      // Get the complete data from the file
+      const completeData = selectedFile.data || selectedFile.preview;
+      if (!completeData || completeData.length === 0) {
+        throw new Error('No data available for visualization');
+      }
+
       // Only send column metadata without actual data values
       const dataContext: GenerateAiSuggestionsRequest = {
         columns: selectedFile.columns.map(col => ({
@@ -1498,30 +1583,13 @@ export default function Home() {
         throw new Error('Invalid response format from API');
       }
 
-      // Validate and filter suggestions based on column types
+      // Simplified validation - just check if the required fields exist
       const validSuggestions = apiSuggestions.filter(suggestion => {
-        const xColumn = dataContext.columns.find(col => col.name === suggestion.xAxis);
-        const yColumn = dataContext.columns.find(col => col.name === suggestion.yAxis);
-
-        if (!xColumn || !yColumn) {
-          return false;
-        }
-
-        // Validate chart type based on column types
-        switch (suggestion.type) {
-          case 'Bar Chart':
-            return !xColumn.metadata.isNumeric && yColumn.metadata.isNumeric;
-          case 'Line Chart':
-            return xColumn.metadata.isNumeric && yColumn.metadata.isNumeric;
-          case 'Area Chart':
-            return xColumn.metadata.isNumeric && yColumn.metadata.isNumeric;
-          case 'Radar Chart':
-            return !xColumn.metadata.isNumeric && yColumn.metadata.isNumeric;
-          case 'Radial Chart':
-            return !xColumn.metadata.isNumeric && yColumn.metadata.isNumeric;
-          default:
-            return false;
-        }
+        return suggestion.type && 
+               suggestion.title && 
+               suggestion.xAxis && 
+               suggestion.yAxis && 
+               suggestion.aggregation;
       });
 
       if (validSuggestions.length === 0) {
@@ -1536,7 +1604,11 @@ export default function Home() {
           xAxis: suggestion.xAxis,
           yAxis: suggestion.yAxis,
           aggregation: suggestion.aggregation,
-          insight: suggestion.insight
+          insight: suggestion.insight,
+          data: completeData,
+          showAllData: true,
+          groupBy: suggestion.xAxis,
+          totalRows: completeData.length
         },
         order: index
       }));
@@ -1560,31 +1632,157 @@ export default function Home() {
   }, [selectedFile, fileSuggestions]);
 
   // Add function to handle suggestion selection
-  const handleSuggestionSelection = (suggestion: VisualizationConfig) => {
-    setSelectedSuggestion(suggestion);
-    setShowSuggestionDialog(false);
-    
-    // Add to visualizations
-    setVisualizations(prev => [...prev, suggestion]);
-    setPendingVisualizations(prev => [...prev, suggestion]);
-    
-    // Add node to flow
-    const newNode: Node = {
-      id: suggestion.id,
-      type: 'visualization',
-      position: { x: 250, y: visualizations.length * 100 },
-      data: { 
-        label: suggestion.title,
-        type: suggestion.type,
-        config: suggestion.config,
-        onEdit: () => handleEditVisualization(suggestion.id),
-        onDelete: () => handleDeleteVisualization(suggestion.id)
+  const handleSuggestionSelection = useCallback((suggestion: VisualizationConfig) => {
+    if (!selectedFile) {
+      toast.error('No file selected');
+      return;
+    }
+
+    // Get the complete data from the file
+    const completeData = selectedFile.data || selectedFile.preview;
+    if (!completeData || completeData.length === 0) {
+      toast.error('No data available for visualization');
+      return;
+    }
+
+    // First, normalize the x-axis values to ensure consistent grouping
+    const normalizedData = completeData.map(row => {
+      const xValue = String(row[suggestion.config.xAxis as keyof typeof row]).trim().toLowerCase();
+      return {
+        ...row,
+        [suggestion.config.xAxis]: xValue
+      };
+    });
+
+    // Group data by x-axis values using a Map for better performance
+    const groupedMap = new Map<string, typeof completeData[0][]>();
+    normalizedData.forEach(row => {
+      const xValue = row[suggestion.config.xAxis as keyof typeof row] as string;
+      if (!groupedMap.has(xValue)) {
+        groupedMap.set(xValue, []);
+      }
+      groupedMap.get(xValue)?.push(row);
+    });
+
+    // Convert Map to array and process each group
+    const processedData = Array.from(groupedMap.entries()).map(([xValue, rows]) => {
+      // For count aggregation, we don't need to process y-axis values
+      if (suggestion.config.aggregation === 'count') {
+        // Get the original text value from the first row
+        const originalTextValue = rows[0][suggestion.config.xAxis as keyof typeof rows[0]];
+        return {
+          name: originalTextValue, // Use original text value for display
+          value: rows.length, // Count as the value
+          count: rows.length,
+          totalRows: rows.length,
+          [suggestion.config.xAxis]: originalTextValue, // Original text value for x-axis
+          [suggestion.config.yAxis]: rows.length // Count for y-axis
+        };
+      }
+
+      // For other aggregations, process y-axis values
+      const yValues = rows
+        .map(row => {
+          const value = row[suggestion.config.yAxis as keyof typeof row];
+          return typeof value === 'number' ? value : 
+                 typeof value === 'string' ? parseFloat(value) : 0;
+        })
+        .filter(val => !isNaN(val));
+
+      // Calculate aggregated value based on the selected method
+      let aggregatedValue = 0;
+      switch (suggestion.config.aggregation) {
+        case 'sum':
+          aggregatedValue = yValues.reduce((sum, val) => sum + val, 0);
+          break;
+        case 'mean':
+          aggregatedValue = yValues.length > 0 
+            ? yValues.reduce((sum, val) => sum + val, 0) / yValues.length 
+            : 0;
+          break;
+        case 'max':
+          aggregatedValue = yValues.length > 0 ? Math.max(...yValues) : 0;
+          break;
+        case 'min':
+          aggregatedValue = yValues.length > 0 ? Math.min(...yValues) : 0;
+          break;
+        case 'none':
+          aggregatedValue = yValues.reduce((sum, val) => sum + val, 0);
+          break;
+        default:
+          aggregatedValue = yValues.reduce((sum, val) => sum + val, 0);
+      }
+
+      // Get the original case of the x-axis value from the first row
+      const originalXValue = rows[0][suggestion.config.xAxis as keyof typeof rows[0]];
+
+      return {
+        name: originalXValue,
+        value: aggregatedValue,
+        count: yValues.length,
+        totalRows: rows.length,
+        [suggestion.config.xAxis]: originalXValue,
+        [suggestion.config.yAxis]: aggregatedValue
+      };
+    });
+
+    // Sort the processed data by x-axis values
+    processedData.sort((a, b) => {
+      const aValue = a.name;
+      const bValue = b.name;
+      
+      // Try numeric comparison first
+      const aNum = Number(aValue);
+      const bNum = Number(bValue);
+      if (!isNaN(aNum) && !isNaN(bNum)) {
+        return aNum - bNum;
+      }
+      
+      // Fall back to string comparison
+      return String(aValue).localeCompare(String(bValue));
+    });
+
+    // Create formatted visualization config
+    const formattedSuggestion: VisualizationConfig = {
+      ...suggestion,
+      config: {
+        ...suggestion.config,
+        data: processedData,
+        showAllData: true,
+        groupBy: suggestion.config.xAxis,
+        totalRows: completeData.length,
+        groupedRows: processedData.length,
+        metadata: {
+          totalGroups: processedData.length,
+          aggregationType: suggestion.config.aggregation,
+          xAxisType: typeof completeData[0][suggestion.config.xAxis as keyof typeof completeData[0]],
+          yAxisType: suggestion.config.aggregation === 'count' ? 'count' : 
+                    typeof completeData[0][suggestion.config.yAxis as keyof typeof completeData[0]]
+        }
       }
     };
-    
+
+    // Update state with new visualization
+    setVisualizations(prev => [...prev, formattedSuggestion]);
+    setPendingVisualizations(prev => [...prev, formattedSuggestion]);
+
+    // Create new node for the visualization
+    const newNode: Node = {
+      id: `viz-${Date.now()}`,
+      type: 'visualization',
+      position: { x: 100, y: 100 },
+      data: {
+        label: formattedSuggestion.config.title,
+        type: formattedSuggestion.type,
+        config: formattedSuggestion.config,
+        onEdit: () => handleEditVisualization(formattedSuggestion.id),
+        onDelete: () => handleDeleteVisualization(formattedSuggestion.id)
+      }
+    };
+
     setNodes(prev => [...prev, newNode]);
-    setShowFlow(true);
-  };
+    setShowSuggestionDialog(false);
+  }, [selectedFile, setVisualizations, setPendingVisualizations, setNodes, handleEditVisualization, handleDeleteVisualization]);
 
   // Update the suggestion dialog to use collapsible format
   const renderSuggestionDialog = () => {

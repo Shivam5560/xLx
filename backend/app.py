@@ -76,69 +76,108 @@ class ExportRequest(BaseModel):
     visualizations: List[Dict[str, Any]]
 
 def safe_float(value):
-    """Convert a value to float, returning None if it's NaN or invalid"""
+    """Convert a value to float, returning 0 if it's NaN, inf, or invalid"""
     try:
-        if pd.isna(value) or np.isnan(value):
-            return None
+        if pd.isna(value) or np.isnan(value) or np.isinf(value):
+            return 0.0
         return float(value)
     except (ValueError, TypeError):
-        return None
+        return 0.0
 
 def calculate_statistics(df: pd.DataFrame) -> dict:
-    """Calculate comprehensive statistics for both numeric and categorical columns"""
-    stats = {
-        "numeric": {},
-        "categorical": {}
-    }
+    """Calculate comprehensive statistics for both numeric and categorical columns,
+    dropping NaNs from calculations but recording their counts."""
+    stats = {"numeric": {}, "categorical": {}}
+
+    # ----- Numeric columns -----
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    for col in numeric_cols:
+        col_orig = df[col]
+        # replace infinities with NaN, then separate out non‐nan values
+        col_clean = col_orig.replace([np.inf, -np.inf], np.nan)
+        nonan = col_clean.dropna()
+
+        stats["numeric"][col] = {
+            "min":    safe_float(nonan.min()),
+            "max":    safe_float(nonan.max()),
+            "mean":   safe_float(nonan.mean()),
+            "median": safe_float(nonan.median()),
+            "mode":   safe_float(nonan.mode().iloc[0]) if not nonan.mode().empty else None,
+            "std":    safe_float(nonan.std()),
+            "percentiles": {
+                "25": safe_float(nonan.quantile(0.25)),
+                "50": safe_float(nonan.quantile(0.50)),
+                "75": safe_float(nonan.quantile(0.75)),
+            },
+            "sum":     safe_float(nonan.sum()),
+            "count":   int(len(nonan)),          # count of non‐missing entries
+            "missing": int(col_clean.isna().sum()),
+            "unique":  int(nonan.nunique())
+        }
+
+    # ----- Categorical columns -----
+    cat_cols = df.select_dtypes(include=['object', 'category']).columns
+    for col in cat_cols:
+        col_orig = df[col]
+        missing_count = int(col_orig.isna().sum())
+        # treat missing as its own category
+        filled = col_orig.fillna('Missing')
+        vc = filled.value_counts()
+
+        stats["categorical"][col] = {
+            "unique":        filled.unique().tolist(),
+            "unique_count":  int(filled.nunique()),
+            "frequency":     {str(k): int(v) for k, v in vc.items()},
+            "top":           str(vc.idxmax()) if not vc.empty else None,
+            "count":         int(len(filled)),
+            "missing":       missing_count
+        }
+
+    return stats
+
+def generate_analysis_sheet(df: pd.DataFrame) -> pd.DataFrame:
+    """Generate a comprehensive analysis sheet for the DataFrame"""
+    analysis_data = []
     
     # Process numeric columns
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     for col in numeric_cols:
         try:
-            # Handle NaN values in numeric columns
             col_data = df[col].replace([np.inf, -np.inf], np.nan)
-            stats["numeric"][col] = {
-                "min": safe_float(col_data.min()),
-                "max": safe_float(col_data.max()),
-                "mean": safe_float(col_data.mean()),
-                "median": safe_float(col_data.median()),
-                "mode": safe_float(col_data.mode().iloc[0]) if not col_data.mode().empty else None,
-                "std": safe_float(col_data.std()),
-                "percentiles": {
-                    "25": safe_float(col_data.quantile(0.25)),
-                    "50": safe_float(col_data.quantile(0.5)),
-                    "75": safe_float(col_data.quantile(0.75))
-                },
-                "sum": safe_float(col_data.sum()),
-                "count": int(col_data.count()),
-                "missing": int(col_data.isna().sum()),
-                "unique": int(col_data.nunique())
-            }
+            analysis_data.append({
+                'Column': col,
+                'Type': 'Numeric',
+                'Min': safe_float(col_data.min()),
+                'Max': safe_float(col_data.max()),
+                'Mean': safe_float(col_data.mean()),
+                'Median': safe_float(col_data.median()),
+                'Std Dev': safe_float(col_data.std()),
+                'Count': int(col_data.count()),
+                'Missing': int(col_data.isna().sum()),
+                'Unique Values': int(col_data.nunique())
+            })
         except Exception as e:
-            print(f"Error processing numeric column {col}: {str(e)}")
-            stats["numeric"][col] = {"error": "Could not process column"}
+            print(f"Error analyzing numeric column {col}: {str(e)}")
     
     # Process categorical columns
     cat_cols = df.select_dtypes(include=['object', 'category']).columns
     for col in cat_cols:
         try:
-            # Handle NaN values in categorical columns
             col_data = df[col].fillna('Missing')
             value_counts = col_data.value_counts()
-            unique_values = col_data.unique().tolist()
-            stats["categorical"][col] = {
-                "unique": unique_values,  # List of unique values
-                "unique_count": int(col_data.nunique()),  # Count of unique values
-                "frequency": {str(k): int(v) for k, v in value_counts.to_dict().items()},
-                "top": str(value_counts.index[0]) if not value_counts.empty else None,
-                "count": int(len(col_data)),
-                "missing": int(col_data.isna().sum())
-            }
+            analysis_data.append({
+                'Column': col,
+                'Type': 'Categorical',
+                'Unique Values': int(col_data.nunique()),
+                'Most Common': str(value_counts.index[0]) if not value_counts.empty else None,
+                'Count': int(len(col_data)),
+                'Missing': int(col_data.isna().sum()),
+                'Top Categories': ', '.join([f"{k}({v})" for k, v in value_counts.head(3).items()])
+            })
         except Exception as e:
-            print(f"Error processing categorical column {col}: {str(e)}")
-            stats["categorical"][col] = {"error": "Could not process column"}
+            print(f"Error analyzing categorical column {col}: {str(e)}")
     
-    return stats
+    return pd.DataFrame(analysis_data)
 
 @app.post("/api/files/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -188,7 +227,9 @@ async def upload_file(file: UploadFile = File(...)):
                 "name": file.filename,
                 "columns": df.columns.tolist(),
                 "preview": df.head(5).to_dict(orient='records'),
-                "statistics": stats
+                "data": df.to_dict(orient='records'),  # Include complete data
+                "statistics": stats,
+                "totalRows": len(df)  # Add total row count
             },
             "message": "File uploaded successfully"
         }
@@ -321,26 +362,36 @@ async def create_visualization(file_id: str, config: VisualizationConfig):
         
         df = files[file_id]
         
-        # Generate visualization data based on type
-        if config.type == "Bar Chart":
-            data = df[config.config["xAxis"]].value_counts().to_dict()
-        elif config.type == "Line Chart":
-            data = df.groupby(config.config["xAxis"])[config.config["yAxis"]].mean().to_dict()
-        elif config.type == "Area Chart":
-            data = df.groupby(config.config["xAxis"])[config.config["yAxis"]].mean().to_dict()
-        elif config.type == "Radar Chart":
-            data = df.groupby(config.config["xAxis"])[config.config["yAxis"]].mean().to_dict()
-        elif config.type == "Radial Chart":
-            data = df[config.config["xAxis"]].value_counts().to_dict()
+        # Get the complete data
+        x_column = config.config["xAxis"]
+        y_column = config.config["yAxis"]
+        aggregation = config.config.get("aggregation", "sum")
+        
+        # Group by x-axis and apply aggregation to y-axis
+        if aggregation == "sum":
+            grouped_data = df.groupby(x_column)[y_column].sum()
+        elif aggregation == "mean":
+            grouped_data = df.groupby(x_column)[y_column].mean()
+        elif aggregation == "max":
+            grouped_data = df.groupby(x_column)[y_column].max()
+        elif aggregation == "min":
+            grouped_data = df.groupby(x_column)[y_column].min()
+        elif aggregation == "count":
+            grouped_data = df.groupby(x_column)[y_column].count()
         else:
-            raise HTTPException(status_code=400, detail=f"Unsupported chart type: {config.type}")
+            grouped_data = df.groupby(x_column)[y_column].sum()  # Default to sum
+        
+        # Convert to dictionary format
+        data = grouped_data.to_dict()
         
         return {
             "success": True,
             "data": {
                 "type": config.type,
                 "title": config.title,
-                "data": data
+                "data": data,
+                "totalRows": len(df),
+                "groupedRows": len(data)
             }
         }
     except Exception as e:
@@ -349,30 +400,50 @@ async def create_visualization(file_id: str, config: VisualizationConfig):
 @app.post("/api/export")
 async def export_results(request: ExportRequest):
     try:
+        print(f"Starting export for file: {request.fileId}")  # Debug log
+        
         if request.fileId not in files:
+            print(f"File not found: {request.fileId}. Available files: {list(files.keys())}")  # Debug log
             raise HTTPException(status_code=404, detail="File not found")
         
         # Get the final processed data
         df = files[request.fileId]
+        print(f"Retrieved DataFrame with shape: {df.shape}")  # Debug log
         
         # Create Excel file in memory
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Write processed data
-            df.to_excel(writer, sheet_name='Processed Data', index=False)
-            
-            # Write analysis
-            analysis_df = generate_analysis_sheet(df)
-            analysis_df.to_excel(writer, sheet_name='Analysis', index=False)
-            
-            # Write operations log
-            operations_df = pd.DataFrame(request.operations)
-            operations_df.to_excel(writer, sheet_name='Operations Log', index=False)
-            
-            # Write visualizations
-            for viz in request.visualizations:
-                viz_data = pd.DataFrame(viz['data'])
-                viz_data.to_excel(writer, sheet_name=viz['title'][:31], index=False)
+        try:
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                print("Writing processed data sheet...")  # Debug log
+                # Write processed data
+                df.to_excel(writer, sheet_name='Processed Data', index=False)
+                
+                print("Generating analysis sheet...")  # Debug log
+                # Write analysis
+                analysis_df = generate_analysis_sheet(df)
+                analysis_df.to_excel(writer, sheet_name='Analysis', index=False)
+                
+                print("Writing operations log...")  # Debug log
+                # Write operations log
+                if request.operations:
+                    operations_df = pd.DataFrame(request.operations)
+                    operations_df.to_excel(writer, sheet_name='Operations Log', index=False)
+                
+                print("Writing visualizations...")  # Debug log
+                # Write visualizations
+                if request.visualizations:
+                    for viz in request.visualizations:
+                        try:
+                            viz_title = viz.get('title', 'Untitled')[:31]  # Excel sheet names limited to 31 chars
+                            viz_data = pd.DataFrame(viz.get('data', {}))
+                            if not viz_data.empty:
+                                viz_data.to_excel(writer, sheet_name=viz_title, index=False)
+                        except Exception as viz_error:
+                            print(f"Error writing visualization {viz_title}: {str(viz_error)}")
+                            continue
+        except Exception as excel_error:
+            print(f"Error creating Excel file: {str(excel_error)}")
+            raise HTTPException(status_code=500, detail=f"Error creating Excel file: {str(excel_error)}")
         
         output.seek(0)
         
@@ -380,13 +451,21 @@ async def export_results(request: ExportRequest):
         original_name = request.fileId
         filename = f"modified_{original_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
+        print(f"Export completed successfully. File: {filename}")  # Debug log
+        
         return StreamingResponse(
             output,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
+    except HTTPException as he:
+        print(f"HTTP Exception in export_results: {str(he)}")
+        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Unexpected error in export_results: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during export: {str(e)}")
 
 @app.get("/api/files/{file_id}")
 async def get_file_data(file_id: str):
@@ -454,69 +533,64 @@ async def generate_ai_suggestions(data: dict):
         )
     
     try:
-        # print("Received metadata for AI suggestions:", json.dumps(data, indent=2))
-        
         # Prepare data context with only metadata
         data_context = {
             "columns": data.get("columns", [])
         }
 
-        # print("Prepared data context:", json.dumps(data_context, indent=2))
+        prompt = """
+        You are a data visualization expert. Analyze the provided column metadata and generate chart suggestions.
 
-        # Prepare the prompt
-        system_prompt = """You are a data visualization expert. Analyze the column metadata and suggest ALL possible visualizations.
-        Return ONLY a JSON object with no additional text.
-        
+        Available columns and their types:
+        {data_context}
+
+        Generate exactly one JSON object with a "suggestions" array. Each suggestion must include:
+        - type: One of "Bar Chart", "Line Chart", "Area Chart", "Radar Chart", or "Radial Chart"
+        - title: A descriptive title
+        - xAxis: Must be an exact column name from the metadata
+        - yAxis: Must be an exact column name from the metadata or same as xAxis when using count aggregation
+        - aggregation: One of "sum", "mean", "max", "min", "count", or "none"
+
         Rules:
-        1. Bar Charts: categorical X-axis, numeric Y-axis
-        2. Line Charts: numeric X and Y axes
-        3. Area Charts: numeric X and Y axes, good for showing cumulative values
-        4. Radar Charts: multiple numeric variables for comparison
-        5. Radial Charts: categorical with ≤8 values, good for showing proportions
-        
-        Format:
-        {
-          "suggestions": [
-            {
-              "type": "Bar Chart" | "Line Chart" | "Area Chart" | "Radar Chart" | "Radial Chart",
-              "title": "string",
-              "xAxis": "column_name",
-              "yAxis": "column_name",
-              "aggregation": "sum" | "mean" | "max" | "min" | "count" | "none",
-              "insight": "string"
-            }
-          ]
-        }"""
+        1. All column names must match exactly with those in the metadata
+        2. For numeric columns, use "sum", "mean", "max", or "min" aggregation
+        3. For categorical columns:
+           - Use "count" aggregation to count occurrences
+           - When using "count" aggregation, yAxis should be the same as xAxis
+           - Example: For "Order Count by Ship Mode", xAxis="Ship Mode", yAxis="Ship Mode", aggregation="count"
+        4. For date/time columns (even if marked as categorical):
+           - Can be used as x-axis in Line/Area charts
+           - Should be sorted chronologically
+           - Can be used with any numeric y-axis
+        5. Bar Chart: 
+           - Use categorical x-axis and numeric y-axis, or 
+           - Use categorical x-axis with count aggregation (yAxis same as xAxis)
+        6. Line Chart: Use date/time or numeric x-axis with numeric y-axis
+        7. Area Chart: Same as Line Chart, emphasizing volume/trend
+        8. Radar Chart: Use categorical x-axis with multiple numeric y-axes
+        9. Radial Chart: Use categorical x-axis with numeric y-axis
 
-        user_prompt = f"Analyze this column metadata and suggest ALL possible visualizations: {json.dumps(data_context)}"
+        Return only the JSON object with the "suggestions" array.
+        Ensure you provide at least two valid distinct suggestions per applicable chart type, varying axes and aggregation where possible, and reference the column names exactly as defined in metadata.
+        """
 
-        print("Sending request to Groq API...")
-        
         # Call Groq API
         completion = groq_client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            model="gemma2-9b-it",
             messages=[
                 {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
                     "role": "user",
-                    "content": user_prompt
+                    "content": prompt.format(data_context=json.dumps(data_context, indent=2))
                 }
             ],
             temperature=0.7,
             max_tokens=1024
         )
 
-        print("Received response from Groq API")
-
         # Parse response
         content = completion.choices[0].message.content
         if not content:
             raise HTTPException(status_code=500, detail="No response from AI")
-
-        # print("Raw AI response:", content)
 
         # Extract JSON from response
         try:
@@ -524,18 +598,12 @@ async def generate_ai_suggestions(data: dict):
             if json_match:
                 content = json_match.group(0)
             response = json.loads(content)
-            print("Parsed JSON response:", json.dumps(response, indent=2))
         except Exception as e:
-            print(f"Error parsing JSON response: {str(e)}")
-            print("Failed content:", content)
             raise HTTPException(status_code=500, detail=f"Invalid JSON response from AI: {str(e)}")
-
+        
         return {"success": True, "data": response}
 
     except Exception as e:
-        print(f"Error in generate_ai_suggestions: {str(e)}")
-        if hasattr(e, 'response'):
-            print(f"Error response: {e.response}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

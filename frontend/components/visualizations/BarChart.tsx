@@ -19,13 +19,21 @@ import {
 } from "@/components/ui/chart"
 
 interface BarChartProps {
-  data: any[];
+  data: Array<{
+    name: string;
+    value: number;
+    [key: string]: any;
+  }>;
   xAxis: string;
   yAxis: string;
   title: string;
   description?: string;
   barSize?: number;
   layout?: "vertical" | "horizontal";
+  showLegend?: boolean;
+  showGrid?: boolean;
+  showTooltip?: boolean;
+  formatValue?: (value: number) => string;
 }
 
 export function BarChart({
@@ -35,14 +43,23 @@ export function BarChart({
   title,
   description,
   barSize = 40,
-  layout = "vertical",
+  layout = "horizontal",
+  showLegend = false,
+  showGrid = true,
+  showTooltip = true,
+  formatValue = (value) => value.toLocaleString(),
 }: BarChartProps) {
   // Transform data for the chart
   const chartData = React.useMemo(() => {
-    return data.map((item) => ({
-      name: item[xAxis],
-      value: item[yAxis],
-    }));
+    return data.map((item) => {
+      const xValue = item[xAxis as keyof typeof item];
+      const yValue = item[yAxis as keyof typeof item];
+      return {
+        name: String(xValue),
+        value: Number(yValue),
+        originalData: item
+      };
+    });
   }, [data, xAxis, yAxis]);
 
   // Create chart config
@@ -50,6 +67,8 @@ export function BarChart({
     const config: ChartConfig = {
       value: {
         label: yAxis,
+        value: 0,
+        color: CHART_COLORS.primary
       }
     };
     
@@ -73,14 +92,18 @@ export function BarChart({
               layout={layout}
               margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
             >
-              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+              {showGrid && (
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+              )}
               <XAxis
                 type={layout === "vertical" ? "number" : "category"}
                 dataKey={layout === "vertical" ? "value" : "name"}
                 className="text-xs"
                 tickLine={false}
                 axisLine={false}
-                tickFormatter={(value) => value.toLocaleString()}
+                tickFormatter={layout === "vertical" ? formatValue : undefined}
+                interval={0}
+                minTickGap={20}
               />
               <YAxis
                 type={layout === "vertical" ? "category" : "number"}
@@ -88,11 +111,13 @@ export function BarChart({
                 className="text-xs"
                 tickLine={false}
                 axisLine={false}
-                tickFormatter={(value) => value.toLocaleString()}
+                tickFormatter={layout === "vertical" ? undefined : formatValue}
               />
-              <ChartTooltip>
-                <ChartTooltipContent />
-              </ChartTooltip>
+              {showTooltip && (
+                <ChartTooltip>
+                  <ChartTooltipContent />
+                </ChartTooltip>
+              )}
               <Bar
                 dataKey="value"
                 fill={CHART_COLORS.primary}
@@ -102,6 +127,19 @@ export function BarChart({
             </RechartsBarChart>
           </ResponsiveContainer>
         </ChartContainer>
+        {showLegend && (
+          <div className="flex flex-wrap justify-center gap-4 mt-4">
+            {chartData.map((item) => (
+              <div key={item.name} className="flex items-center gap-2">
+                <div
+                  className="w-3 h-3 rounded-full"
+                  style={{ backgroundColor: CHART_COLORS.primary }}
+                />
+                <span className="text-sm text-gray-600">{item.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

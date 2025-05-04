@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { PolarAngleAxis, PolarGrid, Radar, RadarChart as RechartsRadarChart, ResponsiveContainer } from "recharts"
+import { PolarAngleAxis, PolarGrid, Radar, RadarChart as RechartsRadarChart, ResponsiveContainer, PolarRadiusAxis } from "recharts"
 
 import {
   Card,
@@ -19,11 +19,19 @@ import {
 } from "@/components/ui/chart"
 
 interface RadarChartProps {
-  data: any[];
+  data: Array<{
+    name: string;
+    value: number;
+    [key: string]: any;
+  }>;
   xAxis: string;
   yAxis: string;
   title: string;
   description?: string;
+  showLegend?: boolean;
+  showGrid?: boolean;
+  showTooltip?: boolean;
+  formatValue?: (value: number) => string;
   fillOpacity?: number;
 }
 
@@ -33,14 +41,23 @@ export function RadarChart({
   yAxis,
   title,
   description,
+  showLegend = false,
+  showGrid = true,
+  showTooltip = true,
+  formatValue = (value) => value.toLocaleString(),
   fillOpacity = 0.2,
 }: RadarChartProps) {
   // Transform data for the chart
   const chartData = React.useMemo(() => {
-    return data.map((item) => ({
-      name: item[xAxis],
-      value: item[yAxis],
-    }));
+    return data.map((item) => {
+      const xValue = item[xAxis as keyof typeof item];
+      const yValue = item[yAxis as keyof typeof item];
+      return {
+        name: String(xValue),
+        value: Number(yValue),
+        originalData: item
+      };
+    });
   }, [data, xAxis, yAxis]);
 
   // Create chart config
@@ -48,6 +65,8 @@ export function RadarChart({
     const config: ChartConfig = {
       value: {
         label: yAxis,
+        value: 0,
+        color: CHART_COLORS.primary
       }
     };
     
@@ -67,16 +86,22 @@ export function RadarChart({
         >
           <ResponsiveContainer width="100%" height="100%">
             <RechartsRadarChart data={chartData}>
-              <PolarGrid stroke={CHART_COLORS.muted} />
+              <PolarGrid className="stroke-muted" />
               <PolarAngleAxis
                 dataKey="name"
                 className="text-xs"
                 tickLine={false}
-                axisLine={false}
               />
-              <ChartTooltip>
-                <ChartTooltipContent />
-              </ChartTooltip>
+              <PolarRadiusAxis
+                className="text-xs"
+                tickLine={false}
+                tickFormatter={formatValue}
+              />
+              {showTooltip && (
+                <ChartTooltip>
+                  <ChartTooltipContent />
+                </ChartTooltip>
+              )}
               <Radar
                 name={yAxis}
                 dataKey="value"
@@ -87,6 +112,19 @@ export function RadarChart({
             </RechartsRadarChart>
           </ResponsiveContainer>
         </ChartContainer>
+        {showLegend && (
+          <div className="flex flex-wrap justify-center gap-4 mt-4">
+            {chartData.map((item) => (
+              <div key={item.name} className="flex items-center gap-2">
+                <div
+                  className="w-3 h-3 rounded-full"
+                  style={{ backgroundColor: CHART_COLORS.primary }}
+                />
+                <span className="text-sm text-gray-600">{item.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
