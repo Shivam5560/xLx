@@ -513,6 +513,19 @@ export default function Home() {
 
     // Aggregate y-axis values
     const processedData = Array.from(groupedMap.entries()).map(([xValue, rows]) => {
+      if (aggregation === 'count') {
+        // For count, use the original text value and count the rows
+        const originalTextValue = rows[0][xAxis];
+        return {
+          name: originalTextValue,
+          value: rows.length,
+          count: rows.length,
+          totalRows: rows.length,
+          [xAxis]: originalTextValue,
+          [yAxis]: rows.length
+        };
+      }
+      // ... existing code for other aggregations ...
       const yValues = rows
         .map(row => {
           const value = row[yAxis];
@@ -533,13 +546,9 @@ export default function Home() {
         case 'min':
           aggregatedValue = yValues.length > 0 ? Math.min(...yValues) : 0;
           break;
-        case 'count':
-          aggregatedValue = yValues.length;
-          break;
         default:
           aggregatedValue = yValues.reduce((sum, val) => sum + val, 0);
       }
-      // Use the original case for display
       const originalXValue = rows[0][xAxis];
       return {
         name: originalXValue,
@@ -1310,6 +1319,7 @@ export default function Home() {
                     <SelectItem value="mean">Mean</SelectItem>
                     <SelectItem value="max">Max</SelectItem>
                     <SelectItem value="min">Min</SelectItem>
+                    <SelectItem value="count">Count</SelectItem>
                     <SelectItem value="none">None</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1666,39 +1676,32 @@ export default function Home() {
 
     // Convert Map to array and process each group
     const processedData = Array.from(groupedMap.entries()).map(([xValue, rows]) => {
-      // For count aggregation, we don't need to process y-axis values
       if (suggestion.config.aggregation === 'count') {
-        // Get the original text value from the first row
+        // For count, use the original text value and count the rows
         const originalTextValue = rows[0][suggestion.config.xAxis as keyof typeof rows[0]];
         return {
-          name: originalTextValue, // Use original text value for display
-          value: rows.length, // Count as the value
+          name: originalTextValue,
+          value: rows.length,
           count: rows.length,
           totalRows: rows.length,
-          [suggestion.config.xAxis]: originalTextValue, // Original text value for x-axis
-          [suggestion.config.yAxis]: rows.length // Count for y-axis
+          [suggestion.config.xAxis]: originalTextValue,
+          [suggestion.config.yAxis]: rows.length
         };
       }
-
       // For other aggregations, process y-axis values
       const yValues = rows
         .map(row => {
           const value = row[suggestion.config.yAxis as keyof typeof row];
-          return typeof value === 'number' ? value : 
-                 typeof value === 'string' ? parseFloat(value) : 0;
+          return typeof value === 'number' ? value : typeof value === 'string' ? parseFloat(value) : 0;
         })
         .filter(val => !isNaN(val));
-
-      // Calculate aggregated value based on the selected method
       let aggregatedValue = 0;
       switch (suggestion.config.aggregation) {
         case 'sum':
           aggregatedValue = yValues.reduce((sum, val) => sum + val, 0);
           break;
         case 'mean':
-          aggregatedValue = yValues.length > 0 
-            ? yValues.reduce((sum, val) => sum + val, 0) / yValues.length 
-            : 0;
+          aggregatedValue = yValues.length > 0 ? yValues.reduce((sum, val) => sum + val, 0) / yValues.length : 0;
           break;
         case 'max':
           aggregatedValue = yValues.length > 0 ? Math.max(...yValues) : 0;
@@ -1712,10 +1715,7 @@ export default function Home() {
         default:
           aggregatedValue = yValues.reduce((sum, val) => sum + val, 0);
       }
-
-      // Get the original case of the x-axis value from the first row
       const originalXValue = rows[0][suggestion.config.xAxis as keyof typeof rows[0]];
-
       return {
         name: originalXValue,
         value: aggregatedValue,
